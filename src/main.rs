@@ -1,8 +1,13 @@
-use trackpad_rs::init_listener;
+use trackpad_rs::MTDevice;
 
 fn main() {
-    let recv = init_listener().unwrap();
-    while let Ok(v) = recv.recv() {
-        println!("{v:?}");
-    }
+    let mut devices = MTDevice::devices();
+    devices.iter_mut().for_each(|d| {
+        d.listen(|dev, touches, fingers, timestamp, frame| {
+            println!("{touches:?}");
+        })
+        .unwrap();
+    });
+
+    loop {}
 }

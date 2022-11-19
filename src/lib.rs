@@ -1,8 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{bail, Result};
+use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
 use lazy_static::lazy_static;
-use std::sync::{
-    mpsc::{channel, Receiver, Sender},
-    Mutex,
+use std::{
+    ffi::c_void,
+    sync::{mpsc::Sender, Mutex},
 };
 
 lazy_static! {
@@ -11,10 +12,196 @@ lazy_static! {
 
 #[link(name = "MultitouchSupport", kind = "framework")]
 extern "C" {
+    fn MTDeviceCreateList() -> CFArrayRef;
     fn MTDeviceCreateDefault() -> MTDeviceRef;
     fn MTRegisterContactFrameCallback(_: MTDeviceRef, _: MTContactCallbackFunction);
+    fn MTRegisterContactFrameCallbackWithRefcon(
+        _: MTDeviceRef,
+        _: MTContactCallbackFunction,
+        extra: *mut c_void,
+    );
     fn MTDeviceStart(_: MTDeviceRef, _: i32);
+    fn MTDeviceStop(_: MTDeviceRef);
+    fn MTDeviceRelease(_: MTDeviceRef);
     fn MTDeviceIsBuiltIn(_: MTDeviceRef) -> bool;
+    fn MTDeviceGetFamilyID(_: MTDeviceRef, _: *mut i32);
+    fn MTDeviceGetDeviceID(_: MTDeviceRef, _: *mut i32);
+    fn MTDeviceIsRunning(_: MTDeviceRef) -> bool;
+    fn MTDeviceIsOpaqueSurface(_: MTDeviceRef) -> bool;
+    /// Divide x and y by 100 to get the value in centimeters
+    fn MTDeviceGetSensorSurfaceDimensions(device: MTDeviceRef, x: *mut i32, y: *mut i32);
+    fn MTDeviceGetSensorDimensions(device: MTDeviceRef, rows: *mut i32, cols: *mut i32);
+    fn MTDeviceGetDriverType(device: MTDeviceRef, _: *mut i32);
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DeviceType {
+    /// Builtin Internal Trackpad
+    InternalTrackpad,
+    /// External Trackpad
+    ExternalTrackpad,
+    /// External Magic Mouse
+    MagicMouse,
+    Unknown,
+}
+
+pub struct MTDevice {
+    pub device_type: DeviceType,
+    pub started: bool,
+    inner: MTDeviceRef,
+}
+
+impl Default for MTDevice {
+    fn default() -> Self {
+        let default_dev = unsafe { MTDeviceCreateDefault() };
+        let device_type = Self::inner_device_type(default_dev);
+
+        Self {
+            device_type,
+            started: false,
+            inner: default_dev,
+        }
+    }
+}
+
+impl MTDevice {
+    /// List all MTDevices
+    pub fn devices() -> Vec<MTDevice> {
+        let mut d = vec![];
+        unsafe {
+            let devices = MTDeviceCreateList();
+            let count = CFArrayGetCount(devices);
+
+            for idx in 0..count {
+                let dev: MTDeviceRef = CFArrayGetValueAtIndex(devices, idx).cast_mut();
+                d.push(MTDevice::new(dev));
+            }
+        };
+        d
+    }
+
+    fn new(dev: MTDeviceRef) -> Self {
+        Self {
+            started: false,
+            device_type: Self::inner_device_type(dev),
+            inner: dev,
+        }
+    }
+
+    fn start(&mut self) -> Result<()> {
+        let is_running = unsafe { MTDeviceIsRunning(self.inner) };
+        if !is_running {
+            unsafe { MTDeviceStart(self.inner, 0) };
+            self.started = true;
+        }
+        Ok(())
+    }
+
+    /// Listen to the MTDevice for MTTouch events and execute the passed callback
+    pub fn listen<F>(&mut self, inner_callback: F) -> Result<()>
+    where
+        F: FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32),
+    {
+        if self.started {
+            bail!("already listening");
+        }
+
+        let inner_callback: Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>> =
+            Box::new(Box::new(inner_callback));
+
+        unsafe {
+            MTRegisterContactFrameCallbackWithRefcon(
+                self.inner,
+                callback,
+                Box::into_raw(inner_callback) as *mut _,
+            )
+        };
+        self.start()?;
+        Ok(())
+    }
+
+    pub fn device_id(&self) -> i32 {
+        let mut dev_id = 0;
+        unsafe {
+            MTDeviceGetDeviceID(self.inner, &mut dev_id);
+        }
+        dev_id
+    }
+
+    pub fn family_id(&self) -> i32 {
+        let mut family_id = 0;
+        unsafe {
+            MTDeviceGetFamilyID(self.inner, &mut family_id);
+        }
+        family_id
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        unsafe { MTDeviceIsBuiltIn(self.inner) }
+    }
+
+    fn inner_device_type(dev: MTDeviceRef) -> DeviceType {
+        let mut family_id: i32 = 0;
+        unsafe { MTDeviceGetFamilyID(dev, &mut family_id) };
+
+        // 110 is an estimate, for M1 Pro it is 108, and M2 just came out
+        if unsafe { MTDeviceIsBuiltIn(dev) } {
+            DeviceType::InternalTrackpad
+        } else if [112, 113].contains(&family_id) {
+            DeviceType::MagicMouse
+        } else if (128..=130).contains(&family_id) {
+            DeviceType::ExternalTrackpad
+        } else {
+            DeviceType::Unknown
+        }
+    }
+
+    pub fn device_type(&self) -> DeviceType {
+        self.device_type
+    }
+
+    pub fn driver_type(&self) -> i32 {
+        let mut driver_type = 0;
+        unsafe { MTDeviceGetDriverType(self.inner, &mut driver_type) };
+        driver_type
+    }
+
+    /// Returns the dimensions of the sensor as (rows, columns)
+    pub fn sensor_dimensions(&self) -> (i32, i32) {
+        let (mut rows, mut columns) = (0, 0);
+        unsafe { MTDeviceGetSensorDimensions(self.inner, &mut rows, &mut columns) };
+        (rows, columns)
+    }
+
+    /// Returns the physical size of the sensor in centimeters as (x, y)
+    pub fn sensor_surface_dimensions(&self) -> (f32, f32) {
+        let (mut x, mut y) = (0, 0);
+        unsafe { MTDeviceGetSensorSurfaceDimensions(self.inner, &mut x, &mut y) };
+        (x as f32 / 100.0, y as f32 / 100.0)
+    }
+
+    pub fn is_running(&mut self) -> bool {
+        self.started
+    }
+
+    /// Stops the device but doesn't drop it
+    pub fn stop(&mut self) {
+        unsafe { MTDeviceStop(self.inner) };
+        self.started = false;
+    }
+
+    /// Both stops and drops (releases) the MTDevice
+    pub fn stop_and_drop(mut self) {
+        self.stop();
+        drop(self);
+    }
+}
+
+impl Drop for MTDevice {
+    /// Releases the MTDevice
+    fn drop(&mut self) {
+        unsafe { MTDeviceRelease(self.inner) }
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -71,53 +258,29 @@ pub struct MTTouch {
     pub z_density: f32,
 }
 
-type MTDeviceRef = *mut std::ffi::c_void;
+pub type MTDeviceRef = *mut std::ffi::c_void;
 type MTContactCallbackFunction =
-    Option<unsafe extern "C" fn(i32, *mut MTTouch, i32, f64, i32) -> i32>;
+    extern "C" fn(MTDeviceRef, &MTTouch, i32, f64, i32, *mut c_void) -> i32;
 
 /// # Safety
 /// Unsafe as this is the actual callback function
-unsafe extern "C" fn callback(
-    mut _device: i32,
-    data: *mut MTTouch,
+extern "C" fn callback(
+    device: MTDeviceRef,
+    data: &MTTouch,
     fingers: i32,
-    mut _timestamp: f64,
-    mut _frame: i32,
+    timestamp: f64,
+    frame: i32,
+    extra: *mut c_void,
 ) -> i32 {
-    let mut i = 0;
-    while i < fingers {
-        let f: *mut MTTouch = &mut *data.offset(i as isize) as *mut MTTouch;
-        i += 1;
-        {
-            GLOBAL_SENDER
-                .lock()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .send(*f)
-                .unwrap();
-        }
+    let data = unsafe { std::slice::from_raw_parts(data, fingers as usize) };
+    if !data.is_empty() {
+        let inner_callback = unsafe {
+            &mut *(extra as *mut &mut dyn for<'a> FnMut(MTDeviceRef, &'a [MTTouch], i32, f64, i32))
+        };
+
+        // let inner_callback =
+        //     extra as *mut Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>>;
+        inner_callback(device, data, fingers, timestamp, frame);
     }
     0
-}
-
-pub fn init_listener() -> Result<Receiver<MTTouch>> {
-    let (sx, rx) = channel();
-    GLOBAL_SENDER
-        .lock()
-        .map_err(|_| anyhow!("Err: Poisoned Mutex"))?
-        .replace(sx);
-
-    unsafe {
-        let dev: MTDeviceRef = MTDeviceCreateDefault();
-        if MTDeviceIsBuiltIn(dev) {
-            println!("primary");
-        } else {
-            println!("secondary");
-        }
-        MTRegisterContactFrameCallback(dev, Some(callback));
-        MTDeviceStart(dev, 0);
-    }
-
-    Ok(rx)
 }
