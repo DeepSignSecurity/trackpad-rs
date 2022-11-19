@@ -1,14 +1,6 @@
 use anyhow::{bail, Result};
 use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
-use lazy_static::lazy_static;
-use std::{
-    ffi::c_void,
-    sync::{mpsc::Sender, Mutex},
-};
-
-lazy_static! {
-    static ref GLOBAL_SENDER: Mutex<Option<Sender<MTTouch>>> = Mutex::new(None);
-}
+use std::ffi::c_void;
 
 #[link(name = "MultitouchSupport", kind = "framework")]
 extern "C" {
@@ -102,22 +94,22 @@ impl MTDevice {
     where
         F: FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32),
     {
-        if self.started {
+        if !self.started {
+            let inner_callback: Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>> =
+                Box::new(Box::new(inner_callback));
+
+            unsafe {
+                MTRegisterContactFrameCallbackWithRefcon(
+                    self.inner,
+                    callback,
+                    Box::into_raw(inner_callback) as *mut _,
+                )
+            };
+            self.start()?;
+            Ok(())
+        } else {
             bail!("already listening");
         }
-
-        let inner_callback: Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>> =
-            Box::new(Box::new(inner_callback));
-
-        unsafe {
-            MTRegisterContactFrameCallbackWithRefcon(
-                self.inner,
-                callback,
-                Box::into_raw(inner_callback) as *mut _,
-            )
-        };
-        self.start()?;
-        Ok(())
     }
 
     pub fn device_id(&self) -> i32 {
