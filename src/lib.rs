@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
-use std::ffi::c_void;
+use std::{ffi::c_void, panic::catch_unwind};
 
 #[link(name = "MultitouchSupport", kind = "framework")]
 extern "C" {
@@ -34,12 +34,12 @@ pub enum DeviceType {
     ExternalTrackpad,
     /// External Magic Mouse
     MagicMouse,
-    Unknown,
+    Unknown(i32),
 }
 
 pub struct MTDevice {
     pub device_type: DeviceType,
-    pub started: bool,
+    pub is_running: bool,
     inner: MTDeviceRef,
 }
 
@@ -50,7 +50,7 @@ impl Default for MTDevice {
 
         Self {
             device_type,
-            started: false,
+            is_running: false,
             inner: default_dev,
         }
     }
@@ -74,18 +74,15 @@ impl MTDevice {
 
     fn new(dev: MTDeviceRef) -> Self {
         Self {
-            started: false,
+            is_running: false,
             device_type: Self::inner_device_type(dev),
             inner: dev,
         }
     }
 
     fn start(&mut self) -> Result<()> {
-        let is_running = unsafe { MTDeviceIsRunning(self.inner) };
-        if !is_running {
-            unsafe { MTDeviceStart(self.inner, 0) };
-            self.started = true;
-        }
+        unsafe { MTDeviceStart(self.inner, 0) };
+        self.is_running = unsafe { MTDeviceIsRunning(self.inner) };
         Ok(())
     }
 
@@ -94,7 +91,7 @@ impl MTDevice {
     where
         F: FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32),
     {
-        if !self.started {
+        if !self.is_running {
             let inner_callback: Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>> =
                 Box::new(Box::new(inner_callback));
 
@@ -144,7 +141,7 @@ impl MTDevice {
         } else if (128..=130).contains(&family_id) {
             DeviceType::ExternalTrackpad
         } else {
-            DeviceType::Unknown
+            DeviceType::Unknown(family_id)
         }
     }
 
@@ -173,13 +170,13 @@ impl MTDevice {
     }
 
     pub fn is_running(&mut self) -> bool {
-        self.started
+        self.is_running
     }
 
     /// Stops the device but doesn't drop it
     pub fn stop(&mut self) {
         unsafe { MTDeviceStop(self.inner) };
-        self.started = false;
+        self.is_running = false;
     }
 
     /// Both stops and drops (releases) the MTDevice
@@ -264,15 +261,18 @@ extern "C" fn callback(
     frame: i32,
     extra: *mut c_void,
 ) -> i32 {
-    let data = unsafe { std::slice::from_raw_parts(data, fingers as usize) };
-    if !data.is_empty() {
-        let inner_callback = unsafe {
-            &mut *(extra as *mut &mut dyn for<'a> FnMut(MTDeviceRef, &'a [MTTouch], i32, f64, i32))
-        };
+    match catch_unwind(|| {
+        let data = unsafe { std::slice::from_raw_parts(data, fingers as usize) };
+        if !data.is_empty() {
+            let inner_callback = unsafe {
+                &mut *(extra
+                    as *mut &mut dyn for<'a> FnMut(MTDeviceRef, &'a [MTTouch], i32, f64, i32))
+            };
 
-        // let inner_callback =
-        //     extra as *mut Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>>;
-        inner_callback(device, data, fingers, timestamp, frame);
+            inner_callback(device, data, fingers, timestamp, frame);
+        }
+    }) {
+        Ok(_) => 0,
+        Err(_) => -1,
     }
-    0
 }
