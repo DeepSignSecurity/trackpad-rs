@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use core_foundation::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
-use std::{ffi::c_void, panic::catch_unwind};
+use std::{ffi::c_void, fmt::Debug, panic::catch_unwind};
 
 #[link(name = "MultitouchSupport", kind = "framework")]
 extern "C" {
@@ -41,6 +41,15 @@ pub struct MTDevice {
     pub device_type: DeviceType,
     pub is_running: bool,
     inner: MTDeviceRef,
+}
+
+impl Debug for MTDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MTDevice")
+            .field("device_type", &self.device_type)
+            .field("is_running", &self.is_running)
+            .finish()
+    }
 }
 
 impl Default for MTDevice {
