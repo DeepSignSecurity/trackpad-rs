@@ -89,11 +89,12 @@ impl MTDevice {
     /// Listen to the MTDevice for MTTouch events and execute the passed callback
     pub fn listen<F>(&mut self, inner_callback: F) -> Result<()>
     where
-        F: FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32),
+        F: Fn(MTDeviceRef, &[MTTouch], i32, f64, i32) + Send + Sync + 'static,
     {
         if !self.is_running {
-            let inner_callback: Box<Box<dyn FnMut(MTDeviceRef, &[MTTouch], i32, f64, i32)>> =
-                Box::new(Box::new(inner_callback));
+            let inner_callback: Box<
+                Box<dyn Fn(MTDeviceRef, &[MTTouch], i32, f64, i32) + Send + Sync + 'static>,
+            > = Box::new(Box::new(inner_callback));
 
             unsafe {
                 MTRegisterContactFrameCallbackWithRefcon(
@@ -265,8 +266,10 @@ extern "C" fn callback(
         let data = unsafe { std::slice::from_raw_parts(data, fingers as usize) };
         if !data.is_empty() {
             let inner_callback = unsafe {
-                &mut *(extra
-                    as *mut &mut dyn for<'a> FnMut(MTDeviceRef, &'a [MTTouch], i32, f64, i32))
+                &*(extra
+                    as *const Box<
+                        dyn Fn(MTDeviceRef, &[MTTouch], i32, f64, i32) + Send + Sync + 'static,
+                    >)
             };
 
             inner_callback(device, data, fingers, timestamp, frame);
