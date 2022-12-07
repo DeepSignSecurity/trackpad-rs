@@ -40,7 +40,7 @@ pub enum DeviceType {
 pub struct MTDevice {
     pub device_type: DeviceType,
     pub is_running: bool,
-    inner: MTDeviceRef,
+    pub inner: MTDeviceRef,
 }
 
 impl Debug for MTDevice {
