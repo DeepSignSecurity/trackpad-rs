@@ -176,7 +176,7 @@ impl MTDevice {
     pub fn sensor_surface_dimensions(&self) -> (f32, f32) {
         let (mut x, mut y) = (0, 0);
         unsafe { MTDeviceGetSensorSurfaceDimensions(self.inner, &mut x, &mut y) };
-        (x as f32 / 100.0, y as f32 / 100.0)
+        (x as f32 / 1000.0, y as f32 / 1000.0)
     }
 
     pub fn is_running(&mut self) -> bool {
