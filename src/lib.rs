@@ -188,7 +188,7 @@ impl MTDevice {
         (x as f32 / 1000.0, y as f32 / 1000.0)
     }
 
-    /// Are we listen to this device?
+    /// Are we listening to this device?
     pub fn is_running(&mut self) -> bool {
         self.is_running
     }
