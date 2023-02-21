@@ -41,9 +41,9 @@ pub enum DeviceType {
 
 /// A type that represents the actual Multitouch device
 pub struct MTDevice {
-    pub device_type: DeviceType,
-    pub is_running: bool,
-    pub inner: MTDeviceRef,
+    device_type: DeviceType,
+    is_running: bool,
+    inner: MTDeviceRef,
 }
 
 impl Debug for MTDevice {
@@ -140,7 +140,8 @@ impl MTDevice {
         family_id
     }
 
-    /// Is this trackpad bult in?
+    /// Is this multitouch device (trackpad) built in? 
+    /// As opposed to being an external device 
     pub fn is_builtin(&self) -> bool {
         unsafe { MTDeviceIsBuiltIn(self.inner) }
     }
@@ -193,13 +194,21 @@ impl MTDevice {
         self.is_running
     }
 
-    /// Stops the device but doesn't drop it
+    /// Get the actual inner [`MTDeviceRef`]
+    /// Its a good idea to avoid using it directly if you can
+    pub fn inner(&self) -> MTDeviceRef {
+        self.inner
+    }
+
+    /// Stops the device but doesn't drop it.
+    /// Allows you to start it again using [`Self::listen`]
     pub fn stop(&mut self) {
         unsafe { MTDeviceStop(self.inner) };
         self.is_running = false;
     }
 
-    /// Both stops and drops (releases) the MTDevice
+    /// Both stops and drops (releases) the MTDevice.
+    /// Releases all resources
     pub fn stop_and_drop(mut self) {
         self.stop();
         drop(self);
