@@ -26,6 +26,7 @@ extern "C" {
     fn MTDeviceGetDriverType(device: MTDeviceRef, _: *mut i32);
 }
 
+/// The type of Multitouch device
 #[derive(Debug, Clone, Copy)]
 pub enum DeviceType {
     /// Builtin Internal Trackpad
@@ -34,9 +35,11 @@ pub enum DeviceType {
     ExternalTrackpad,
     /// External Magic Mouse
     MagicMouse,
+    /// Unknown
     Unknown(i32),
 }
 
+/// A type that represents the actual Multitouch device
 pub struct MTDevice {
     pub device_type: DeviceType,
     pub is_running: bool,
@@ -119,6 +122,7 @@ impl MTDevice {
         }
     }
 
+    /// Get the ID of the current trackpad
     pub fn device_id(&self) -> i32 {
         let mut dev_id = 0;
         unsafe {
@@ -127,6 +131,7 @@ impl MTDevice {
         dev_id
     }
 
+    /// Get the Family ID of the current trackpad
     pub fn family_id(&self) -> i32 {
         let mut family_id = 0;
         unsafe {
@@ -135,6 +140,7 @@ impl MTDevice {
         family_id
     }
 
+    /// Is this trackpad bult in?
     pub fn is_builtin(&self) -> bool {
         unsafe { MTDeviceIsBuiltIn(self.inner) }
     }
@@ -155,10 +161,13 @@ impl MTDevice {
         }
     }
 
+    /// Gives information about what type of Device this current Multitouch device is
     pub fn device_type(&self) -> DeviceType {
         self.device_type
     }
 
+    /// Gives information about the type of driver in use. Honestly, no idea what this means for
+    /// us.
     pub fn driver_type(&self) -> i32 {
         let mut driver_type = 0;
         unsafe { MTDeviceGetDriverType(self.inner, &mut driver_type) };
@@ -179,6 +188,7 @@ impl MTDevice {
         (x as f32 / 1000.0, y as f32 / 1000.0)
     }
 
+    /// Are we listen to this device?
     pub fn is_running(&mut self) -> bool {
         self.is_running
     }
@@ -203,6 +213,7 @@ impl Drop for MTDevice {
     }
 }
 
+/// Just a point (x, y)
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct MTPoint {
@@ -210,13 +221,17 @@ pub struct MTPoint {
     pub y: f32,
 }
 
+/// A struct that contains the current touch position, and velocity
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct MTVector {
+    /// current touch position
     pub pos: MTPoint,
+    /// velocity
     pub vel: MTPoint,
 }
 
+/// The state of an individual touch on a Multitouch device / trackpad.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub enum MTTouchState {
@@ -230,39 +245,61 @@ pub enum MTTouchState {
     OutOfRange = 7,
 }
 
-/// https://gist.github.com/rmhsilva/61cc45587ed34707da34818a76476e11
-/// https://web.archive.org/web/20151012175118/http://steike.com/code/multitouch/
-/// https://hci.rwth-aachen.de/guide-trackpad
-/// http://www.iphonesmartapps.org/aladino/?a=multitouch
-/// https://chuck.cs.princeton.edu/release/files/examples/chuck-embed/core/util_hid.cpp maybe useful
-/// https://github.com/JitouchApp/Jitouch/blob/3b5018e4bc839426a6ce0917cea6df753d19da10/Application/Gesture.m#L2930
+/// The data that the Multitouch Framework gives back, some of the fields are unknown
+///
+/// ### References:
+/// <https://gist.github.com/rmhsilva/61cc45587ed34707da34818a76476e11>
+/// <https://web.archive.org/web/20151012175118/http://steike.com/code/multitouch/>
+/// <https://hci.rwth-aachen.de/guide-trackpad>
+/// <http://www.iphonesmartapps.org/aladino/?a=multitouch>
+/// <https://chuck.cs.princeton.edu/release/files/examples/chuck-embed/core/util_hid.cpp> maybe useful
+/// <https://github.com/JitouchApp/Jitouch/blob/3b5018e4bc839426a6ce0917cea6df753d19da10/Application/Gesture.m#L2930>
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
 pub struct MTTouch {
-    pub frame: i32,          // The current frame
-    pub timestamp: f64,      // Event timestamp
-    pub identifier: i32,     // identifier unique for life of a touch
-    pub state: MTTouchState, // the current state
+    /// The current frame number
+    pub frame: i32,
+    /// Event timestamp
+    pub timestamp: f64,
+    /// identifier unique for life of a touch
+    pub identifier: i32,
+    /// the current state
+    pub state: MTTouchState,
     pub finger_id: i32,
     pub hand_id: i32,
-    pub normalized: MTVector, // the normalized position and vector of the touch (0,0 to 1,1)
-    pub z_total: f32,         // ZTotal?
-    pub unknown3: i32,        // Always 0?
-    pub angle: f32,           // angle of the touch in radian
-    pub major_axis: f32,      // ellipsoid (you can track the angle of each finger)
+    /// the normalized position and vector of the touch (0,0 to 1,1)
+    pub normalized: MTVector,
+    /// ZTotal?
+    pub z_total: f32,
+    /// Always 0?
+    pub unknown3: i32,
+    /// angle of the touch in radian
+    pub angle: f32,
+    /// ellipsoid (you can track the angle of each finger)
+    pub major_axis: f32,
     pub minor_axis: f32,
-    pub absolute: MTVector, // Absolute position and velocity?
-    pub unknown4: i32,      // Always 0?
-    pub unknown5: i32,      // Always 0?
+    /// Absolute position and velocity?
+    pub absolute: MTVector,
+    /// Always 0?
+    pub unknown4: i32,
+    /// Always 0?
+    pub unknown5: i32,
     pub z_density: f32,
 }
 
+/// The actual inner pointer to Multitouch Device, best not to use this directly.
+/// Only public because of a specific use case for us.
 pub type MTDeviceRef = *mut std::ffi::c_void;
+
 type MTContactCallbackFunction =
     extern "C" fn(MTDeviceRef, &MTTouch, i32, f64, i32, *mut c_void) -> i32;
 
 /// # Safety
-/// Unsafe as this is the actual callback function
+///
+/// This function is the one passed to the Multitouch Framework as the callback to execute.
+/// casts [`*mut c_void`] into [`*const Box<dyn Fn()>`] which is the actual callback the user gives
+/// to this library and executes it.
+/// Probably best not to touch this.
 extern "C" fn callback(
     device: MTDeviceRef,
     data: &MTTouch,
